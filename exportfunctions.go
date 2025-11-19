@@ -39,10 +39,23 @@ func TrimLeadingUnderscoreExportWrapper(exportfunc ExportFunction) ExportFunctio
 // mask commands before exporting. This prevents secret values from appearing
 // in GitHub Actions logs. Only masks values for keys that don't start with
 // underscore (public values are not masked).
-func GitHubActionsMaskWrapper(exportfunc ExportFunction) ExportFunction {
+// Additionally, exports all variables to $GITHUB_ENV for use in subsequent steps.
+// The trimUnderscore parameter indicates whether to trim leading underscores from
+// key names when exporting to GITHUB_ENV (to match the export statement behavior).
+func GitHubActionsMaskWrapper(exportfunc ExportFunction, trimUnderscore bool) ExportFunction {
 	return func(w io.Writer, values map[string]string) {
-		// Output mask commands for all non-underscore-prefixed keys
-		for key, value := range values {
+		// Get sorted keys for deterministic output
+		keys := make([]string, 0, len(values))
+		for k := range values {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		// Output mask commands and GITHUB_ENV exports
+		for _, key := range keys {
+			value := values[key]
+
+			// Mask non-underscore-prefixed keys (using original key name)
 			if !strings.HasPrefix(key, "_") {
 				// Output the raw value for masking (before shell escaping)
 				rawValue := strings.Map(func(r rune) rune {
@@ -54,6 +67,25 @@ func GitHubActionsMaskWrapper(exportfunc ExportFunction) ExportFunction {
 				if _, err := fmt.Fprintf(w, "echo \"::add-mask::%s\"\n", shellescape.Quote(rawValue)); err != nil {
 					fmt.Fprintf(os.Stderr, "ejson2env failed to write mask command: %v\n", err)
 				}
+			}
+
+			// Determine the key name to use for GITHUB_ENV export
+			exportKey := key
+			if trimUnderscore {
+				exportKey = strings.TrimLeft(key, "_")
+			}
+
+			// Export to GITHUB_ENV for all keys
+			// Filter control characters from value
+			filteredValue := strings.Map(func(r rune) rune {
+				if unicode.IsControl(r) && r != '\n' {
+					return -1
+				}
+				return r
+			}, value)
+
+			if _, err := fmt.Fprintf(w, "echo \"%s=%s\" >> $GITHUB_ENV\n", exportKey, shellescape.Quote(filteredValue)); err != nil {
+				fmt.Fprintf(os.Stderr, "ejson2env failed to write GITHUB_ENV export: %v\n", err)
 			}
 		}
 

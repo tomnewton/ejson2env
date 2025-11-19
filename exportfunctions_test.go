@@ -140,8 +140,10 @@ func TestGitHubActionsMaskWrapper(t *testing.T) {
 				"API_TOKEN":  "token123",
 			},
 			expected: []string{
-				"echo \"::add-mask::my-secret-value\"",
 				"echo \"::add-mask::token123\"",
+				"echo \"API_TOKEN=token123\" >> $GITHUB_ENV",
+				"echo \"::add-mask::my-secret-value\"",
+				"echo \"SECRET_KEY=my-secret-value\" >> $GITHUB_ENV",
 				"export API_TOKEN=token123",
 				"export SECRET_KEY=my-secret-value",
 			},
@@ -152,7 +154,9 @@ func TestGitHubActionsMaskWrapper(t *testing.T) {
 				"SECRET_KEY":  "secret-value",
 			},
 			expected: []string{
+				"echo \"_PUBLIC_KEY=public-value\" >> $GITHUB_ENV",
 				"echo \"::add-mask::secret-value\"",
+				"echo \"SECRET_KEY=secret-value\" >> $GITHUB_ENV",
 				"export SECRET_KEY=secret-value",
 				"export _PUBLIC_KEY=public-value",
 			},
@@ -166,6 +170,7 @@ func TestGitHubActionsMaskWrapper(t *testing.T) {
 			},
 			expected: []string{
 				"echo \"::add-mask::'value with spaces'\"",
+				"echo \"SECRET='value with spaces'\" >> $GITHUB_ENV",
 				"export SECRET='value with spaces'",
 			},
 		},
@@ -181,7 +186,7 @@ func TestGitHubActionsMaskWrapper(t *testing.T) {
 			t.Parallel()
 
 			var buf bytes.Buffer
-			wrapped := ejson2env.GitHubActionsMaskWrapper(ejson2env.ExportEnv)
+			wrapped := ejson2env.GitHubActionsMaskWrapper(ejson2env.ExportEnv, false)
 			wrapped(&buf, tc.env)
 			output := buf.String()
 			t.Log(output)
@@ -218,10 +223,10 @@ func TestGitHubActionsMaskWithTrimUnderscore(t *testing.T) {
 	// Match the order from main.go:
 	// 1. Start with base export function
 	// 2. Apply trim wrapper (inner)
-	// 3. Apply mask wrapper (outer)
+	// 3. Apply mask wrapper (outer) with trimUnderscore=true
 	exportFunc := ejson2env.ExportEnv
 	exportFunc = ejson2env.TrimLeadingUnderscoreExportWrapper(exportFunc)
-	exportFunc = ejson2env.GitHubActionsMaskWrapper(exportFunc)
+	exportFunc = ejson2env.GitHubActionsMaskWrapper(exportFunc, true)
 
 	exportFunc(&buf, env)
 	output := buf.String()
@@ -234,6 +239,15 @@ func TestGitHubActionsMaskWithTrimUnderscore(t *testing.T) {
 
 	if strings.Contains(output, "echo \"::add-mask::public-value\"") {
 		t.Errorf("output should not mask public-value (underscore-prefixed)")
+	}
+
+	// Should export to GITHUB_ENV with trimmed key names (matching the export statements)
+	if !strings.Contains(output, "echo \"PUBLIC_KEY=public-value\" >> $GITHUB_ENV") {
+		t.Errorf("output missing GITHUB_ENV export with trimmed underscore for PUBLIC_KEY")
+	}
+
+	if !strings.Contains(output, "echo \"SECRET_KEY=secret-value\" >> $GITHUB_ENV") {
+		t.Errorf("output missing GITHUB_ENV export for SECRET_KEY")
 	}
 
 	// Both keys should be exported with underscore trimmed

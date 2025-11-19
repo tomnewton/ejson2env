@@ -71,8 +71,9 @@ func main() {
 
 		// Apply GitHub Actions masking wrapper last (outermost)
 		// so it receives the original key names and can decide what to mask
+		// Pass trim_underscore flag so GITHUB_ENV exports match the export statements
 		if github_actions {
-			exportFunc = ejson2env.GitHubActionsMaskWrapper(exportFunc)
+			exportFunc = ejson2env.GitHubActionsMaskWrapper(exportFunc, trim_underscore)
 		}
 
 		if c.Bool("key-from-stdin") {
