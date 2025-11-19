@@ -63,8 +63,6 @@ func main() {
 			exportFunc = ejson2env.ExportQuiet
 		}
 
-		// Apply trim-underscore wrapper first (closest to base export function)
-		// so that GitHub Actions masking can see the original key names
 		if trim_underscore {
 			exportFunc = ejson2env.TrimLeadingUnderscoreExportWrapper(exportFunc)
 		}
