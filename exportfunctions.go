@@ -35,14 +35,11 @@ func TrimLeadingUnderscoreExportWrapper(exportfunc ExportFunction) ExportFunctio
 	}
 }
 
-// GitHubActionsMaskWrapper wraps an export function to output GitHub Actions
+// GitHubMaskWrapper wraps an export function to output GitHub Actions
 // mask commands before exporting. This prevents secret values from appearing
 // in GitHub Actions logs. Only masks values for keys that don't start with
 // underscore (public values are not masked).
-// Additionally, exports all variables to $GITHUB_ENV for use in subsequent steps.
-// The trimUnderscore parameter indicates whether to trim leading underscores from
-// key names when exporting to GITHUB_ENV (to match the export statement behavior).
-func GitHubActionsMaskWrapper(exportfunc ExportFunction, trimUnderscore bool) ExportFunction {
+func GitHubMaskWrapper(exportfunc ExportFunction) ExportFunction {
 	return func(w io.Writer, values map[string]string) {
 		// Get sorted keys for deterministic output
 		keys := make([]string, 0, len(values))
@@ -51,13 +48,11 @@ func GitHubActionsMaskWrapper(exportfunc ExportFunction, trimUnderscore bool) Ex
 		}
 		sort.Strings(keys)
 
-		// Output mask commands and GITHUB_ENV exports
+		// Output mask commands for non-underscore-prefixed keys
 		for _, key := range keys {
 			value := values[key]
 
-			// Mask non-underscore-prefixed keys (using original key name)
 			if !strings.HasPrefix(key, "_") {
-				// Output the raw value for masking (before shell escaping)
 				rawValue := strings.Map(func(r rune) rune {
 					if unicode.IsControl(r) && r != '\n' {
 						return -1
@@ -68,15 +63,35 @@ func GitHubActionsMaskWrapper(exportfunc ExportFunction, trimUnderscore bool) Ex
 					fmt.Fprintf(os.Stderr, "ejson2env failed to write mask command: %v\n", err)
 				}
 			}
+		}
 
-			// Determine the key name to use for GITHUB_ENV export
+		// Call the wrapped export function
+		exportfunc(w, values)
+	}
+}
+
+// GitHubEnvExportWrapper wraps an export function to export variables to
+// $GITHUB_ENV for use in subsequent workflow steps.
+// The trimUnderscore parameter indicates whether to trim leading underscores
+// from key names when exporting to GITHUB_ENV.
+func GitHubEnvExportWrapper(exportfunc ExportFunction, trimUnderscore bool) ExportFunction {
+	return func(w io.Writer, values map[string]string) {
+		// Get sorted keys for deterministic output
+		keys := make([]string, 0, len(values))
+		for k := range values {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		// Export to GITHUB_ENV for all keys
+		for _, key := range keys {
+			value := values[key]
+
 			exportKey := key
 			if trimUnderscore {
 				exportKey = strings.TrimLeft(key, "_")
 			}
 
-			// Export to GITHUB_ENV for all keys
-			// Filter control characters from value
 			filteredValue := strings.Map(func(r rune) rune {
 				if unicode.IsControl(r) && r != '\n' {
 					return -1

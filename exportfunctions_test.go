@@ -124,9 +124,9 @@ func TestExportEnvMultipleKeys(t *testing.T) {
 	}
 }
 
-// TestGitHubActionsMaskWrapper tests that the GitHub Actions wrapper
+// TestGitHubMaskWrapper tests that the GitHub mask wrapper
 // outputs mask commands for non-underscore-prefixed keys
-func TestGitHubActionsMaskWrapper(t *testing.T) {
+func TestGitHubMaskWrapper(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]struct {
@@ -141,11 +141,12 @@ func TestGitHubActionsMaskWrapper(t *testing.T) {
 			},
 			expected: []string{
 				"echo \"::add-mask::token123\"",
-				"echo \"API_TOKEN=token123\" >> $GITHUB_ENV",
 				"echo \"::add-mask::my-secret-value\"",
-				"echo \"SECRET_KEY=my-secret-value\" >> $GITHUB_ENV",
 				"export API_TOKEN=token123",
 				"export SECRET_KEY=my-secret-value",
+			},
+			notExpected: []string{
+				">> $GITHUB_ENV",
 			},
 		},
 		"does not mask underscore-prefixed keys": {
@@ -154,14 +155,13 @@ func TestGitHubActionsMaskWrapper(t *testing.T) {
 				"SECRET_KEY":  "secret-value",
 			},
 			expected: []string{
-				"echo \"_PUBLIC_KEY=public-value\" >> $GITHUB_ENV",
 				"echo \"::add-mask::secret-value\"",
-				"echo \"SECRET_KEY=secret-value\" >> $GITHUB_ENV",
 				"export SECRET_KEY=secret-value",
 				"export _PUBLIC_KEY=public-value",
 			},
 			notExpected: []string{
 				"echo \"::add-mask::public-value\"",
+				">> $GITHUB_ENV",
 			},
 		},
 		"handles special characters in values": {
@@ -170,13 +170,16 @@ func TestGitHubActionsMaskWrapper(t *testing.T) {
 			},
 			expected: []string{
 				"echo \"::add-mask::'value with spaces'\"",
-				"echo \"SECRET='value with spaces'\" >> $GITHUB_ENV",
 				"export SECRET='value with spaces'",
+			},
+			notExpected: []string{
+				">> $GITHUB_ENV",
 			},
 		},
 		"empty map": {
-			env:      map[string]string{},
-			expected: []string{},
+			env:         map[string]string{},
+			expected:    []string{},
+			notExpected: []string{},
 		},
 	}
 
@@ -186,7 +189,7 @@ func TestGitHubActionsMaskWrapper(t *testing.T) {
 			t.Parallel()
 
 			var buf bytes.Buffer
-			wrapped := ejson2env.GitHubActionsMaskWrapper(ejson2env.ExportEnv, false)
+			wrapped := ejson2env.GitHubMaskWrapper(ejson2env.ExportEnv)
 			wrapped(&buf, tc.env)
 			output := buf.String()
 			t.Log(output)
@@ -208,10 +211,98 @@ func TestGitHubActionsMaskWrapper(t *testing.T) {
 	}
 }
 
-// TestGitHubActionsMaskWithTrimUnderscore tests that the wrappers work correctly
-// when chained together. The mask wrapper should be applied to the base function first,
-// then the trim wrapper wraps that, matching the order in main.go
-func TestGitHubActionsMaskWithTrimUnderscore(t *testing.T) {
+// TestGitHubEnvExportWrapper tests that the GitHub env export wrapper
+// exports variables to $GITHUB_ENV
+func TestGitHubEnvExportWrapper(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		env            map[string]string
+		trimUnderscore bool
+		expected       []string // lines we expect to see
+		notExpected    []string // lines we should NOT see
+	}{
+		"exports all keys to GITHUB_ENV": {
+			env: map[string]string{
+				"SECRET_KEY": "my-secret-value",
+				"API_TOKEN":  "token123",
+			},
+			trimUnderscore: false,
+			expected: []string{
+				"echo \"API_TOKEN=token123\" >> $GITHUB_ENV",
+				"echo \"SECRET_KEY=my-secret-value\" >> $GITHUB_ENV",
+				"export API_TOKEN=token123",
+				"export SECRET_KEY=my-secret-value",
+			},
+			notExpected: []string{
+				"::add-mask::",
+			},
+		},
+		"exports underscore-prefixed keys without trimming": {
+			env: map[string]string{
+				"_PUBLIC_KEY": "public-value",
+			},
+			trimUnderscore: false,
+			expected: []string{
+				"echo \"_PUBLIC_KEY=public-value\" >> $GITHUB_ENV",
+				"export _PUBLIC_KEY=public-value",
+			},
+			notExpected: []string{
+				"::add-mask::",
+			},
+		},
+		"trims underscore when flag is set": {
+			env: map[string]string{
+				"_PUBLIC_KEY": "public-value",
+			},
+			trimUnderscore: true,
+			expected: []string{
+				"echo \"PUBLIC_KEY=public-value\" >> $GITHUB_ENV",
+			},
+			notExpected: []string{
+				"echo \"_PUBLIC_KEY=public-value\" >> $GITHUB_ENV",
+				"::add-mask::",
+			},
+		},
+		"empty map": {
+			env:            map[string]string{},
+			trimUnderscore: false,
+			expected:       []string{},
+			notExpected:    []string{},
+		},
+	}
+
+	for label, tc := range cases {
+		tc := tc
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			wrapped := ejson2env.GitHubEnvExportWrapper(ejson2env.ExportEnv, tc.trimUnderscore)
+			wrapped(&buf, tc.env)
+			output := buf.String()
+			t.Log(output)
+
+			// Check for expected lines
+			for _, expected := range tc.expected {
+				if !strings.Contains(output, expected) {
+					t.Errorf("output missing expected line: %q", expected)
+				}
+			}
+
+			// Check for lines that should NOT be present
+			for _, notExpected := range tc.notExpected {
+				if strings.Contains(output, notExpected) {
+					t.Errorf("output contains unexpected line: %q", notExpected)
+				}
+			}
+		})
+	}
+}
+
+// TestCombinedGitHubWrappers tests that both wrappers work correctly
+// when chained together, matching the order in main.go
+func TestCombinedGitHubWrappers(t *testing.T) {
 	t.Parallel()
 
 	env := map[string]string{
@@ -223,10 +314,12 @@ func TestGitHubActionsMaskWithTrimUnderscore(t *testing.T) {
 	// Match the order from main.go:
 	// 1. Start with base export function
 	// 2. Apply trim wrapper (inner)
-	// 3. Apply mask wrapper (outer) with trimUnderscore=true
+	// 3. Apply GITHUB_ENV export wrapper
+	// 4. Apply mask wrapper (outer)
 	exportFunc := ejson2env.ExportEnv
 	exportFunc = ejson2env.TrimLeadingUnderscoreExportWrapper(exportFunc)
-	exportFunc = ejson2env.GitHubActionsMaskWrapper(exportFunc, true)
+	exportFunc = ejson2env.GitHubEnvExportWrapper(exportFunc, true)
+	exportFunc = ejson2env.GitHubMaskWrapper(exportFunc)
 
 	exportFunc(&buf, env)
 	output := buf.String()
@@ -241,7 +334,7 @@ func TestGitHubActionsMaskWithTrimUnderscore(t *testing.T) {
 		t.Errorf("output should not mask public-value (underscore-prefixed)")
 	}
 
-	// Should export to GITHUB_ENV with trimmed key names (matching the export statements)
+	// Should export to GITHUB_ENV with trimmed key names
 	if !strings.Contains(output, "echo \"PUBLIC_KEY=public-value\" >> $GITHUB_ENV") {
 		t.Errorf("output missing GITHUB_ENV export with trimmed underscore for PUBLIC_KEY")
 	}

@@ -43,8 +43,12 @@ func main() {
 			Usage: "Trim leading underscore from variable names",
 		},
 		cli.BoolFlag{
-			Name:  "github-actions",
-			Usage: "Output GitHub Actions mask commands to prevent secrets from appearing in logs",
+			Name:  "gh-mask-sensitive",
+			Usage: "Output GitHub Actions ::add-mask:: commands to prevent secrets from appearing in logs",
+		},
+		cli.BoolFlag{
+			Name:  "gh-export-to-env",
+			Usage: "Export variables to $GITHUB_ENV for use in subsequent workflow steps",
 		},
 	}
 
@@ -55,7 +59,8 @@ func main() {
 		keydir := c.String("keydir")
 		quiet := c.Bool("quiet")
 		trim_underscore := c.Bool("trim-underscore")
-		github_actions := c.Bool("github-actions")
+		gh_mask_sensitive := c.Bool("gh-mask-sensitive")
+		gh_export_to_env := c.Bool("gh-export-to-env")
 
 		// select the ExportFunction to use
 		exportFunc := ejson2env.ExportEnv
@@ -67,11 +72,14 @@ func main() {
 			exportFunc = ejson2env.TrimLeadingUnderscoreExportWrapper(exportFunc)
 		}
 
-		// Apply GitHub Actions masking wrapper last (outermost)
-		// so it receives the original key names and can decide what to mask
-		// Pass trim_underscore flag so GITHUB_ENV exports match the export statements
-		if github_actions {
-			exportFunc = ejson2env.GitHubActionsMaskWrapper(exportFunc, trim_underscore)
+		// Apply GitHub Actions wrappers (outermost)
+		// Order: GITHUB_ENV export first, then masking, so mask commands appear first in output
+		if gh_export_to_env {
+			exportFunc = ejson2env.GitHubEnvExportWrapper(exportFunc, trim_underscore)
+		}
+
+		if gh_mask_sensitive {
+			exportFunc = ejson2env.GitHubMaskWrapper(exportFunc)
 		}
 
 		if c.Bool("key-from-stdin") {
